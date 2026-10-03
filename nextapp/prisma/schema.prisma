@@ -1,0 +1,128 @@
+// Prisma schema for the School Equipment Reservation System.
+// Run `npm run db:push` (prototyping) or `npm run db:migrate` (versioned
+// migrations) after setting DATABASE_URL in .env.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  TEACHER
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  DISABLED
+}
+
+enum EquipmentType {
+  PROJECTOR
+  MICROPHONE
+  SPEAKER
+  LAPTOP
+  EXTENSION_CORD
+  OTHER
+}
+
+enum EquipmentStatus {
+  AVAILABLE
+  MAINTENANCE
+  UNAVAILABLE
+  RETIRED
+}
+
+enum RoomStatus {
+  AVAILABLE
+  UNAVAILABLE
+}
+
+enum ReservationStatus {
+  CONFIRMED
+  CANCELLED
+}
+
+model User {
+  id           String        @id @default(cuid())
+  name         String
+  email        String        @unique
+  passwordHash String
+  role         Role          @default(TEACHER)
+  status       UserStatus    @default(ACTIVE)
+  createdAt    DateTime      @default(now())
+  reservations Reservation[]
+
+  @@index([role])
+}
+
+model Equipment {
+  id          String              @id @default(cuid())
+  name        String              @unique
+  type        EquipmentType
+  status      EquipmentStatus     @default(AVAILABLE)
+  location    String?
+  condition   String?
+  description String?
+  createdAt   DateTime            @default(now())
+  reservedIn  ReservationEquipment[]
+
+  @@index([type])
+  @@index([status])
+}
+
+model Room {
+  id           String        @id @default(cuid())
+  name         String        @unique
+  building     String?
+  capacity     Int?
+  status       RoomStatus    @default(AVAILABLE)
+  createdAt    DateTime      @default(now())
+  reservations Reservation[]
+}
+
+// One reservation can carry several pieces of equipment, and one piece of
+// equipment can appear in many reservations over time — a join table, not a
+// foreign key on either side.
+model ReservationEquipment {
+  id            String      @id @default(cuid())
+  reservationId String
+  equipmentId   String
+  reservation   Reservation @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  equipment     Equipment   @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+
+  @@unique([reservationId, equipmentId])
+  @@index([equipmentId])
+}
+
+model Reservation {
+  id            String                 @id @default(cuid())
+  userId        String
+  roomId        String
+  // Stored as a single UTC instant each: the wall-clock date/time the teacher
+  // picked, combined server-side before saving. See lib/datetime.ts.
+  startDateTime DateTime
+  endDateTime   DateTime
+  purpose       String
+  notes         String?
+  status        ReservationStatus      @default(CONFIRMED)
+  createdAt     DateTime               @default(now())
+  updatedAt     DateTime               @updatedAt
+  cancelledAt   DateTime?
+  user          User                   @relation(fields: [userId], references: [id])
+  room          Room                   @relation(fields: [roomId], references: [id])
+  equipment     ReservationEquipment[]
+
+  // Narrows the conflict-check scan (see lib/conflicts.ts) to same-day,
+  // same-status rows before the exact overlap math runs in application code —
+  // Postgres has no native "half-open interval overlap" operator without the
+  // btree_gist extension, which this schema intentionally avoids to keep
+  // `db push` working on a stock Postgres instance.
+  @@index([roomId, status, startDateTime])
+  @@index([userId, status, startDateTime])
+  @@index([status, startDateTime])
+}
